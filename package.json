@@ -1,0 +1,26 @@
+{
+  "name": "ig_to_tg_reposter",
+  "version": "1.0.0",
+  "description": "Моніторить Instagram-акаунт і репостить пости (текст + фото) у Telegram-канал",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node --esm src/index.ts",
+    "post-old": "node dist/cli.js post-old"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "dotenv": "^16.4.5",
+    "instagram-private-api": "^1.46.1",
+    "telegraf": "^4.16.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.10.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.2"
+  },
+  "license": "MIT"
+}

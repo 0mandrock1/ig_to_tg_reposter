@@ -1,0 +1,78 @@
+import 'dotenv/config';
+import { Db } from './db.js';
+import { InstagramClient } from './instagram.js';
+import { TelegramPublisher } from './telegram.js';
+
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`missing required env var: ${name}`);
+  return value;
+}
+
+const IG_USERNAME = requireEnv('IG_USERNAME');
+const IG_PASSWORD = requireEnv('IG_PASSWORD');
+const IG_TARGET_ACCOUNT = requireEnv('IG_TARGET_ACCOUNT');
+const TG_BOT_TOKEN = requireEnv('TG_BOT_TOKEN');
+const TG_CHANNEL_USERNAME = requireEnv('TG_CHANNEL_USERNAME');
+const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 300000);
+
+const db = new Db();
+const ig = new InstagramClient(IG_USERNAME, IG_PASSWORD);
+const tg = new TelegramPublisher(TG_BOT_TOKEN, TG_CHANNEL_USERNAME);
+
+let stopping = false;
+let timer: NodeJS.Timeout | undefined;
+
+async function pollOnce(): Promise<void> {
+  console.log('[index] polling instagram for new posts...');
+  const posts = await ig.fetchUserPosts(IG_TARGET_ACCOUNT, 20);
+
+  // process oldest-first so channel order matches posting order for any new batch
+  for (const post of [...posts].reverse()) {
+    if (stopping) return;
+    if (db.exists(post.ig_id)) continue;
+
+    db.insert(post);
+    try {
+      await tg.publishPost(post.text, post.media_urls);
+      db.markReposted(post.ig_id);
+      console.log(`[index] reposted ${post.ig_id}`);
+    } catch (err) {
+      console.error(`[index] failed to repost ${post.ig_id}: ${(err as Error).message}`);
+    }
+  }
+}
+
+async function loop(): Promise<void> {
+  try {
+    await pollOnce();
+  } catch (err) {
+    console.error(`[index] poll cycle failed: ${(err as Error).message}`);
+  }
+  if (!stopping) {
+    timer = setTimeout(loop, POLL_INTERVAL_MS);
+  }
+}
+
+async function main(): Promise<void> {
+  await ig.login();
+  console.log('[index] logged in to instagram, starting poll loop');
+  await loop();
+}
+
+function shutdown(signal: string): void {
+  console.log(`[index] received ${signal}, shutting down`);
+  stopping = true;
+  if (timer) clearTimeout(timer);
+  db.close();
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+main().catch((err) => {
+  console.error('[index] fatal error:', err);
+  db.close();
+  process.exit(1);
+});
