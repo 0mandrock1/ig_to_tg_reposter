@@ -1,9 +1,9 @@
 import { IgApiClient, IgLoginRequiredError } from 'instagram-private-api';
 import fs from 'node:fs';
 import path from 'node:path';
+import { withRetry } from './retry.js';
 
 const SESSION_PATH = path.resolve(process.cwd(), 'ig-session.json');
-const MAX_RETRIES = 3;
 
 export interface IgPost {
   ig_id: string;
@@ -15,23 +15,6 @@ export interface IgPost {
 function randomDelay(minMs = 2000, maxMs = 5000): Promise<void> {
   const ms = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastError = err;
-      const backoffMs = 2 ** attempt * 1000;
-      console.error(`[instagram] ${label} failed (attempt ${attempt}/${MAX_RETRIES}): ${(err as Error).message}`);
-      if (attempt < MAX_RETRIES) {
-        await new Promise((resolve) => setTimeout(resolve, backoffMs));
-      }
-    }
-  }
-  throw lastError;
 }
 
 export class InstagramClient {
@@ -50,7 +33,7 @@ export class InstagramClient {
       try {
         const saved = JSON.parse(fs.readFileSync(SESSION_PATH, 'utf-8'));
         await this.ig.state.deserialize(saved);
-        await withRetry(() => this.ig.account.currentUser(), 'session validation');
+        await withRetry(() => this.ig.account.currentUser(), 'session validation', '[instagram]');
         this.loggedIn = true;
         return;
       } catch {
@@ -58,10 +41,14 @@ export class InstagramClient {
       }
     }
 
-    await withRetry(async () => {
-      await this.ig.simulate.preLoginFlow();
-      await this.ig.account.login(this.username, this.password);
-    }, 'login');
+    await withRetry(
+      async () => {
+        await this.ig.simulate.preLoginFlow();
+        await this.ig.account.login(this.username, this.password);
+      },
+      'login',
+      '[instagram]',
+    );
     await this.saveSession();
     this.loggedIn = true;
   }
@@ -79,6 +66,7 @@ export class InstagramClient {
     const userId = await withRetry(
       () => this.ig.user.getIdByUsername(targetUsername),
       `resolve user id for ${targetUsername}`,
+      '[instagram]',
     );
     await randomDelay();
 
@@ -88,7 +76,7 @@ export class InstagramClient {
     while (posts.length < limit) {
       let items;
       try {
-        items = await withRetry(() => feed.items(), 'fetch feed page');
+        items = await withRetry(() => feed.items(), 'fetch feed page', '[instagram]');
       } catch (err) {
         if (err instanceof IgLoginRequiredError) {
           this.loggedIn = false;

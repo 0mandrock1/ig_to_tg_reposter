@@ -1,25 +1,9 @@
 import { Telegraf } from 'telegraf';
 import type { InputMediaPhoto } from 'telegraf/types';
+import { withRetry } from './retry.js';
 
-const MAX_RETRIES = 3;
 const CAPTION_LIMIT = 1024; // Telegram caption limit for media messages
-
-async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastError = err;
-      const backoffMs = 2 ** attempt * 1000;
-      console.error(`[telegram] ${label} failed (attempt ${attempt}/${MAX_RETRIES}): ${(err as Error).message}`);
-      if (attempt < MAX_RETRIES) {
-        await new Promise((resolve) => setTimeout(resolve, backoffMs));
-      }
-    }
-  }
-  throw lastError;
-}
+const MEDIA_GROUP_LIMIT = 10; // Telegram hard cap per sendMediaGroup call
 
 export class TelegramPublisher {
   private bot: Telegraf;
@@ -34,7 +18,11 @@ export class TelegramPublisher {
     const caption = text.length > CAPTION_LIMIT ? `${text.slice(0, CAPTION_LIMIT - 1)}…` : text;
 
     if (mediaUrls.length === 0) {
-      await withRetry(() => this.bot.telegram.sendMessage(this.channel, text || ' '), 'sendMessage');
+      await withRetry(
+        () => this.bot.telegram.sendMessage(this.channel, text || ' '),
+        'sendMessage',
+        '[telegram]',
+      );
       return;
     }
 
@@ -42,16 +30,26 @@ export class TelegramPublisher {
       await withRetry(
         () => this.bot.telegram.sendPhoto(this.channel, mediaUrls[0], { caption }),
         'sendPhoto',
+        '[telegram]',
       );
       return;
     }
 
-    const media: InputMediaPhoto[] = mediaUrls.map((url, i) => ({
+    const cappedUrls = mediaUrls.slice(0, MEDIA_GROUP_LIMIT);
+    if (mediaUrls.length > MEDIA_GROUP_LIMIT) {
+      console.error(`[telegram] post has ${mediaUrls.length} photos, sending only first ${MEDIA_GROUP_LIMIT}`);
+    }
+
+    const media: InputMediaPhoto[] = cappedUrls.map((url, i) => ({
       type: 'photo',
       media: url,
       ...(i === 0 ? { caption } : {}),
     }));
 
-    await withRetry(() => this.bot.telegram.sendMediaGroup(this.channel, media), 'sendMediaGroup');
+    await withRetry(
+      () => this.bot.telegram.sendMediaGroup(this.channel, media),
+      'sendMediaGroup',
+      '[telegram]',
+    );
   }
 }

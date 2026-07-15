@@ -57,14 +57,10 @@ export class Db {
 
   getRandomUnpostedOld(): Post | undefined {
     return this.db
-      .prepare('SELECT * FROM posts WHERE old_reposted_at IS NULL ORDER BY RANDOM() LIMIT 1')
+      .prepare(
+        'SELECT * FROM posts WHERE old_reposted_at IS NULL AND reposted_at IS NULL ORDER BY RANDOM() LIMIT 1',
+      )
       .get() as Post | undefined;
-  }
-
-  getAllUnpostedOld(): Post[] {
-    return this.db
-      .prepare('SELECT * FROM posts WHERE old_reposted_at IS NULL')
-      .all() as Post[];
   }
 
   close(): void {

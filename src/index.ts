@@ -22,6 +22,7 @@ const tg = new TelegramPublisher(TG_BOT_TOKEN, TG_CHANNEL_USERNAME);
 
 let stopping = false;
 let timer: NodeJS.Timeout | undefined;
+let loopPromise: Promise<void> | undefined;
 
 async function pollOnce(): Promise<void> {
   console.log('[index] polling instagram for new posts...');
@@ -32,9 +33,9 @@ async function pollOnce(): Promise<void> {
     if (stopping) return;
     if (db.exists(post.ig_id)) continue;
 
-    db.insert(post);
     try {
       await tg.publishPost(post.text, post.media_urls);
+      db.insert(post);
       db.markReposted(post.ig_id);
       console.log(`[index] reposted ${post.ig_id}`);
     } catch (err) {
@@ -48,28 +49,38 @@ async function loop(): Promise<void> {
     await pollOnce();
   } catch (err) {
     console.error(`[index] poll cycle failed: ${(err as Error).message}`);
+    try {
+      await ig.login();
+      console.log('[index] re-authenticated with instagram after failure');
+    } catch (loginErr) {
+      console.error(`[index] re-login failed: ${(loginErr as Error).message}`);
+    }
   }
   if (!stopping) {
-    timer = setTimeout(loop, POLL_INTERVAL_MS);
+    timer = setTimeout(() => {
+      loopPromise = loop();
+    }, POLL_INTERVAL_MS);
   }
 }
 
 async function main(): Promise<void> {
   await ig.login();
   console.log('[index] logged in to instagram, starting poll loop');
-  await loop();
+  loopPromise = loop();
+  await loopPromise;
 }
 
-function shutdown(signal: string): void {
+async function shutdown(signal: string): Promise<void> {
   console.log(`[index] received ${signal}, shutting down`);
   stopping = true;
   if (timer) clearTimeout(timer);
+  if (loopPromise) await loopPromise;
   db.close();
   process.exit(0);
 }
 
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));
 
 main().catch((err) => {
   console.error('[index] fatal error:', err);
