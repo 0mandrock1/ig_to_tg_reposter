@@ -9,15 +9,13 @@ function requireEnv(name: string): string {
   return value;
 }
 
-const IG_USERNAME = requireEnv('IG_USERNAME');
-const IG_PASSWORD = requireEnv('IG_PASSWORD');
 const IG_TARGET_ACCOUNT = requireEnv('IG_TARGET_ACCOUNT');
 const TG_BOT_TOKEN = requireEnv('TG_BOT_TOKEN');
 const TG_CHANNEL_USERNAME = requireEnv('TG_CHANNEL_USERNAME');
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 300000);
 
 const db = new Db();
-const ig = new InstagramClient(IG_USERNAME, IG_PASSWORD);
+const ig = new InstagramClient();
 const tg = new TelegramPublisher(TG_BOT_TOKEN, TG_CHANNEL_USERNAME);
 
 let stopping = false;
@@ -34,7 +32,7 @@ async function pollOnce(): Promise<void> {
     if (db.exists(post.ig_id)) continue;
 
     try {
-      await tg.publishPost(post.text, post.media_urls);
+      await tg.publishPost(post.text, post.media_urls, post.video_url);
       db.insert(post);
       db.markReposted(post.ig_id);
       console.log(`[index] reposted ${post.ig_id}`);
@@ -51,9 +49,9 @@ async function loop(): Promise<void> {
     console.error(`[index] poll cycle failed: ${(err as Error).message}`);
     try {
       await ig.login();
-      console.log('[index] re-authenticated with instagram after failure');
-    } catch (loginErr) {
-      console.error(`[index] re-login failed: ${(loginErr as Error).message}`);
+      console.log('[index] restarted browser after failure');
+    } catch (restartErr) {
+      console.error(`[index] browser restart failed: ${(restartErr as Error).message}`);
     }
   }
   if (!stopping) {
@@ -65,7 +63,7 @@ async function loop(): Promise<void> {
 
 async function main(): Promise<void> {
   await ig.login();
-  console.log('[index] logged in to instagram, starting poll loop');
+  console.log('[index] browser started, starting poll loop');
   loopPromise = loop();
   await loopPromise;
 }
@@ -75,6 +73,7 @@ async function shutdown(signal: string): Promise<void> {
   stopping = true;
   if (timer) clearTimeout(timer);
   if (loopPromise) await loopPromise;
+  await ig.close();
   db.close();
   process.exit(0);
 }
@@ -82,8 +81,9 @@ async function shutdown(signal: string): Promise<void> {
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
 process.on('SIGINT', () => void shutdown('SIGINT'));
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error('[index] fatal error:', err);
+  await ig.close();
   db.close();
   process.exit(1);
 });

@@ -14,8 +14,17 @@ export class TelegramPublisher {
     this.channel = channelUsername.startsWith('@') ? channelUsername : `@${channelUsername}`;
   }
 
-  async publishPost(text: string, mediaUrls: string[]): Promise<void> {
+  async publishPost(text: string, mediaUrls: string[], videoUrl: string | null = null): Promise<void> {
     const caption = text.length > CAPTION_LIMIT ? `${text.slice(0, CAPTION_LIMIT - 1)}…` : text;
+
+    if (videoUrl) {
+      await withRetry(
+        () => this.bot.telegram.sendVideo(this.channel, videoUrl, { caption }),
+        'sendVideo',
+        '[telegram]',
+      );
+      return;
+    }
 
     if (mediaUrls.length === 0) {
       await withRetry(

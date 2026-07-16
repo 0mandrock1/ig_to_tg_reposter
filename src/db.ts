@@ -5,6 +5,7 @@ export interface Post {
   ig_id: string;
   text: string;
   media_urls: string; // JSON-encoded string[]
+  video_url: string | null;
   reposted_at: string | null;
   old_reposted_at: string | null;
 }
@@ -24,6 +25,7 @@ export class Db {
         ig_id TEXT PRIMARY KEY,
         text TEXT NOT NULL,
         media_urls TEXT NOT NULL,
+        video_url TEXT,
         reposted_at TEXT,
         old_reposted_at TEXT
       );
@@ -35,12 +37,12 @@ export class Db {
     return row !== undefined;
   }
 
-  insert(post: { ig_id: string; text: string; media_urls: string[] }): void {
+  insert(post: { ig_id: string; text: string; media_urls: string[]; video_url: string | null }): void {
     this.db
       .prepare(
-        'INSERT OR IGNORE INTO posts (ig_id, text, media_urls, reposted_at, old_reposted_at) VALUES (?, ?, ?, NULL, NULL)',
+        'INSERT OR IGNORE INTO posts (ig_id, text, media_urls, video_url, reposted_at, old_reposted_at) VALUES (?, ?, ?, ?, NULL, NULL)',
       )
-      .run(post.ig_id, post.text, JSON.stringify(post.media_urls));
+      .run(post.ig_id, post.text, JSON.stringify(post.media_urls), post.video_url);
   }
 
   markReposted(igId: string): void {
