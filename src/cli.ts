@@ -35,7 +35,8 @@ async function postOld(db: Db, ig: InstagramClient, tg: TelegramPublisher): Prom
     return;
   }
   const resolved = await resolveArchivedPost(ig, post, true);
-  await tg.publishPost(resolved.text, resolved.media);
+  const messageIds = await tg.publishPost(resolved.text, resolved.media);
+  db.setTelegramMessageIds(post.ig_id, messageIds);
   db.markOldReposted(post.ig_id);
   console.log(`[cli] posted old post ${post.ig_id}`);
 }
@@ -45,7 +46,8 @@ async function seed(db: Db, ig: InstagramClient, tg: TelegramPublisher, count: n
   let posted = 0;
   for (const post of [...selected].reverse()) {
     const resolved = await resolveArchivedPost(ig, post, true);
-    await tg.publishPost(resolved.text, resolved.media);
+    const messageIds = await tg.publishPost(resolved.text, resolved.media);
+    db.setTelegramMessageIds(post.ig_id, messageIds);
     db.markOldReposted(post.ig_id);
     posted++;
     console.log(`[cli] seeded ${post.ig_id} (${posted}/${selected.length})`);

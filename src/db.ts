@@ -12,6 +12,7 @@ export interface PostRow {
   taken_at: number | null;
   reposted_at: string | null;
   old_reposted_at: string | null;
+  tg_message_ids: string | null;
 }
 
 export class Db {
@@ -34,7 +35,8 @@ export class Db {
         permalink TEXT,
         taken_at INTEGER,
         reposted_at TEXT,
-        old_reposted_at TEXT
+        old_reposted_at TEXT,
+        tg_message_ids TEXT
       );
     `);
 
@@ -46,6 +48,7 @@ export class Db {
       ['media_json', 'TEXT'],
       ['permalink', 'TEXT'],
       ['taken_at', 'INTEGER'],
+      ['tg_message_ids', 'TEXT'],
     ];
     for (const [name, type] of additions) {
       if (!columns.has(name)) this.db.exec(`ALTER TABLE posts ADD COLUMN ${name} ${type}`);
@@ -85,6 +88,10 @@ export class Db {
 
   markOldReposted(igId: string): void {
     this.db.prepare('UPDATE posts SET old_reposted_at = ? WHERE ig_id = ?').run(new Date().toISOString(), igId);
+  }
+
+  setTelegramMessageIds(igId: string, messageIds: number[]): void {
+    this.db.prepare('UPDATE posts SET tg_message_ids = ? WHERE ig_id = ?').run(JSON.stringify(messageIds), igId);
   }
 
   getRandomUnpostedOld(): PostRow | undefined {

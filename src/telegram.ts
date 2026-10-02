@@ -24,34 +24,35 @@ export class TelegramPublisher {
     this.channel = channelUsername.startsWith('@') ? channelUsername : `@${channelUsername}`;
   }
 
-  async publishPost(text: string, media: IgMedia[]): Promise<void> {
+  async publishPost(text: string, media: IgMedia[]): Promise<number[]> {
     const caption = clip(text, CAPTION_LIMIT);
 
     if (media.length === 0) {
-      await withRetry(
+      const message = await withRetry(
         () => this.bot.telegram.sendMessage(this.channel, clip(text || ' ', TEXT_LIMIT)),
         'sendMessage',
         '[telegram]',
       );
-      return;
+      return [message.message_id];
     }
 
     if (media.length === 1) {
       const item = media[0];
       if (item.kind === 'video') {
-        await withRetry(
+        const message = await withRetry(
           () => this.bot.telegram.sendVideo(this.channel, telegramMedia(item), { caption }),
           'sendVideo',
           '[telegram]',
         );
-      } else {
-        await withRetry(
-          () => this.bot.telegram.sendPhoto(this.channel, telegramMedia(item), { caption }),
-          'sendPhoto',
-          '[telegram]',
-        );
+        return [message.message_id];
       }
-      return;
+
+      const message = await withRetry(
+        () => this.bot.telegram.sendPhoto(this.channel, telegramMedia(item), { caption }),
+        'sendPhoto',
+        '[telegram]',
+      );
+      return [message.message_id];
     }
 
     const capped = media.slice(0, MEDIA_GROUP_LIMIT);
@@ -65,10 +66,11 @@ export class TelegramPublisher {
       ...(index === 0 && caption ? { caption } : {}),
     })) as Array<InputMediaPhoto | InputMediaVideo>;
 
-    await withRetry(
+    const messages = await withRetry(
       () => this.bot.telegram.sendMediaGroup(this.channel, group),
       'sendMediaGroup',
       '[telegram]',
     );
+    return messages.map((message) => message.message_id);
   }
 }

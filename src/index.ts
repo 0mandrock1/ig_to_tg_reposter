@@ -25,6 +25,7 @@ let loopPromise: Promise<void> | undefined;
 async function pollOnce(): Promise<void> {
   console.log('[index] discovering instagram posts...');
   const refs = await ig.fetchUserPostRefs(IG_TARGET_ACCOUNT, 20);
+  console.log(`[index] discovered ${refs.length} visible instagram posts`);
 
   for (const ref of [...refs].reverse()) {
     if (stopping) return;
@@ -32,8 +33,9 @@ async function pollOnce(): Promise<void> {
 
     try {
       const post = await ig.fetchPost(ref, true);
-      await tg.publishPost(post.text, post.media);
+      const messageIds = await tg.publishPost(post.text, post.media);
       db.insert(post);
+      db.setTelegramMessageIds(post.ig_id, messageIds);
       db.markReposted(post.ig_id);
       console.log(`[index] reposted ${post.ig_id}`);
     } catch (err) {
@@ -49,9 +51,11 @@ async function loop(): Promise<void> {
     console.error(`[index] poll cycle failed: ${(err as Error).message}`);
     try {
       await ig.login();
-      console.log('[index] restarted browser after failure');
+      console.log('[index] restarted browser after failure; retrying once now');
+      await pollOnce();
+      console.log('[index] retry poll succeeded');
     } catch (restartErr) {
-      console.error(`[index] browser restart failed: ${(restartErr as Error).message}`);
+      console.error(`[index] immediate retry failed: ${(restartErr as Error).message}`);
     }
   }
   if (!stopping) {
