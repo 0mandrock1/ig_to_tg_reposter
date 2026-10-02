@@ -23,21 +23,21 @@ let timer: NodeJS.Timeout | undefined;
 let loopPromise: Promise<void> | undefined;
 
 async function pollOnce(): Promise<void> {
-  console.log('[index] polling instagram for new posts...');
-  const posts = await ig.fetchUserPosts(IG_TARGET_ACCOUNT, 20);
+  console.log('[index] discovering instagram posts...');
+  const refs = await ig.fetchUserPostRefs(IG_TARGET_ACCOUNT, 20);
 
-  // process oldest-first so channel order matches posting order for any new batch
-  for (const post of [...posts].reverse()) {
+  for (const ref of [...refs].reverse()) {
     if (stopping) return;
-    if (db.exists(post.ig_id)) continue;
+    if (db.exists(ref.ig_id)) continue;
 
     try {
-      await tg.publishPost(post.text, post.media_urls, post.video_url);
+      const post = await ig.fetchPost(ref, true);
+      await tg.publishPost(post.text, post.media);
       db.insert(post);
       db.markReposted(post.ig_id);
       console.log(`[index] reposted ${post.ig_id}`);
     } catch (err) {
-      console.error(`[index] failed to repost ${post.ig_id}: ${(err as Error).message}`);
+      console.error(`[index] failed to repost ${ref.ig_id}: ${(err as Error).message}`);
     }
   }
 }

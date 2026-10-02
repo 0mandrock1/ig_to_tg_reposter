@@ -1,9 +1,19 @@
 import { Telegraf } from 'telegraf';
-import type { InputMediaPhoto } from 'telegraf/types';
+import type { InputMediaPhoto, InputMediaVideo } from 'telegraf/types';
+import type { IgMedia } from './instagram.js';
 import { withRetry } from './retry.js';
 
-const CAPTION_LIMIT = 1024; // Telegram caption limit for media messages
-const MEDIA_GROUP_LIMIT = 10; // Telegram hard cap per sendMediaGroup call
+const CAPTION_LIMIT = 1024;
+const TEXT_LIMIT = 4096;
+const MEDIA_GROUP_LIMIT = 10;
+
+function clip(text: string, limit: number): string {
+  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+}
+
+function telegramMedia(media: IgMedia): string | { source: Buffer; filename: string } {
+  return media.data ? { source: media.data, filename: media.filename } : media.url;
+}
 
 export class TelegramPublisher {
   private bot: Telegraf;
@@ -14,49 +24,49 @@ export class TelegramPublisher {
     this.channel = channelUsername.startsWith('@') ? channelUsername : `@${channelUsername}`;
   }
 
-  async publishPost(text: string, mediaUrls: string[], videoUrl: string | null = null): Promise<void> {
-    const caption = text.length > CAPTION_LIMIT ? `${text.slice(0, CAPTION_LIMIT - 1)}…` : text;
+  async publishPost(text: string, media: IgMedia[]): Promise<void> {
+    const caption = clip(text, CAPTION_LIMIT);
 
-    if (videoUrl) {
+    if (media.length === 0) {
       await withRetry(
-        () => this.bot.telegram.sendVideo(this.channel, videoUrl, { caption }),
-        'sendVideo',
-        '[telegram]',
-      );
-      return;
-    }
-
-    if (mediaUrls.length === 0) {
-      await withRetry(
-        () => this.bot.telegram.sendMessage(this.channel, text || ' '),
+        () => this.bot.telegram.sendMessage(this.channel, clip(text || ' ', TEXT_LIMIT)),
         'sendMessage',
         '[telegram]',
       );
       return;
     }
 
-    if (mediaUrls.length === 1) {
-      await withRetry(
-        () => this.bot.telegram.sendPhoto(this.channel, mediaUrls[0], { caption }),
-        'sendPhoto',
-        '[telegram]',
-      );
+    if (media.length === 1) {
+      const item = media[0];
+      if (item.kind === 'video') {
+        await withRetry(
+          () => this.bot.telegram.sendVideo(this.channel, telegramMedia(item), { caption }),
+          'sendVideo',
+          '[telegram]',
+        );
+      } else {
+        await withRetry(
+          () => this.bot.telegram.sendPhoto(this.channel, telegramMedia(item), { caption }),
+          'sendPhoto',
+          '[telegram]',
+        );
+      }
       return;
     }
 
-    const cappedUrls = mediaUrls.slice(0, MEDIA_GROUP_LIMIT);
-    if (mediaUrls.length > MEDIA_GROUP_LIMIT) {
-      console.error(`[telegram] post has ${mediaUrls.length} photos, sending only first ${MEDIA_GROUP_LIMIT}`);
+    const capped = media.slice(0, MEDIA_GROUP_LIMIT);
+    if (media.length > MEDIA_GROUP_LIMIT) {
+      console.warn(`[telegram] post has ${media.length} media items, sending first ${MEDIA_GROUP_LIMIT}`);
     }
 
-    const media: InputMediaPhoto[] = cappedUrls.map((url, i) => ({
-      type: 'photo',
-      media: url,
-      ...(i === 0 ? { caption } : {}),
-    }));
+    const group: Array<InputMediaPhoto | InputMediaVideo> = capped.map((item, index) => ({
+      type: item.kind === 'video' ? 'video' : 'photo',
+      media: telegramMedia(item),
+      ...(index === 0 && caption ? { caption } : {}),
+    })) as Array<InputMediaPhoto | InputMediaVideo>;
 
     await withRetry(
-      () => this.bot.telegram.sendMediaGroup(this.channel, media),
+      () => this.bot.telegram.sendMediaGroup(this.channel, group),
       'sendMediaGroup',
       '[telegram]',
     );

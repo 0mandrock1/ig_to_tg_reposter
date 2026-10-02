@@ -1,119 +1,181 @@
+import { downloadBlob, postfetch } from '@postfetch/core';
+import fetch from 'node-fetch';
 import { chromium, type Browser } from 'playwright';
+import { SocksProxyAgent } from 'socks-proxy-agent';
 
-export interface IgPost {
+export type IgMediaKind = 'image' | 'video';
+
+export interface IgPostRef {
   ig_id: string;
+  permalink: string;
+}
+
+export interface IgMedia {
+  kind: IgMediaKind;
+  url: string;
+  filename: string;
+  headers: Record<string, string>;
+  data?: Buffer;
+}
+
+export interface IgPost extends IgPostRef {
   text: string;
-  media_urls: string[]; // photo URLs (empty for video posts)
-  video_url: string | null; // set for reels/video posts
-  taken_at: number; // unix seconds
+  media: IgMedia[];
+  taken_at: number;
 }
 
-interface RawMediaNode {
-  id: string;
-  is_video: boolean;
-  video_url?: string;
-  display_url: string;
-  edge_media_to_caption?: { edges: Array<{ node: { text: string } }> };
-  edge_sidecar_to_children?: { edges: Array<{ node: RawMediaNode }> };
-  taken_at_timestamp: number;
+const DEFAULT_WARP_PROXY = 'socks5h://127.0.0.1:1080';
+const MAX_MEDIA_BYTES = 50_000_000;
+const PROFILE_SETTLE_MS = 8_000;
+
+function headersToRecord(value: unknown): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!value) return result;
+  if (typeof (value as { forEach?: unknown }).forEach === 'function') {
+    (value as { forEach: (cb: (v: string, k: string) => void) => void }).forEach((v, k) => {
+      result[k] = v;
+    });
+    return result;
+  }
+  if (Array.isArray(value)) {
+    for (const [k, v] of value as Array<[string, string]>) result[k] = v;
+    return result;
+  }
+  for (const [k, v] of Object.entries(value as Record<string, string>)) result[k] = String(v);
+  return result;
 }
 
-function parsePost(node: RawMediaNode): IgPost {
-  const text = node.edge_media_to_caption?.edges?.[0]?.node?.text ?? '';
-
-  if (node.is_video) {
-    return {
-      ig_id: node.id,
-      text,
-      media_urls: [],
-      video_url: node.video_url ?? null,
-      taken_at: node.taken_at_timestamp,
-    };
-  }
-
-  const mediaUrls: string[] = [];
-  if (node.edge_sidecar_to_children?.edges?.length) {
-    for (const { node: child } of node.edge_sidecar_to_children.edges) {
-      if (!child.is_video) mediaUrls.push(child.display_url);
-    }
-  } else {
-    mediaUrls.push(node.display_url);
-  }
-
+function postRefFromHref(href: string): IgPostRef | null {
+  const match = href.match(/\/(p|reel|reels|tv)\/([A-Za-z0-9_-]+)/);
+  if (!match) return null;
+  const [, kind, code] = match;
+  const canonicalKind = kind === 'reels' ? 'reel' : kind;
   return {
-    ig_id: node.id,
-    text,
-    media_urls: mediaUrls,
-    video_url: null,
-    taken_at: node.taken_at_timestamp,
+    ig_id: code,
+    permalink: `https://www.instagram.com/${canonicalKind}/${code}/`,
   };
 }
 
-/** Anonymous (logged-out) scraper of a public Instagram profile's post grid (posts + reels). */
+/**
+ * Public Instagram reader.
+ *
+ * Discovery is done in a logged-out Chromium session behind the same WARP path
+ * used by ultimate-media-manager. Individual post resolution is delegated to
+ * @postfetch/core, which tries Instagram's public page/mobile/embed/GraphQL
+ * fallbacks and returns normalized ordered media.
+ */
 export class InstagramClient {
   private browser: Browser | undefined;
+  private readonly proxyUrl: string;
+  private readonly proxyAgent: SocksProxyAgent;
+  private readonly warpFetch: typeof globalThis.fetch;
+
+  constructor(proxyUrl = process.env.WARP_PROXY ?? DEFAULT_WARP_PROXY) {
+    this.proxyUrl = proxyUrl;
+    this.proxyAgent = new SocksProxyAgent(proxyUrl);
+    this.warpFetch = (async (input: any, init?: any) => {
+      const normalizedInput =
+        typeof input === 'string' || input instanceof URL ? input : input?.url ?? String(input);
+      const response = await fetch(normalizedInput, {
+        ...(init as object),
+        agent: this.proxyAgent,
+      } as Parameters<typeof fetch>[1]);
+      return response as unknown as Response;
+    }) as typeof globalThis.fetch;
+  }
 
   async login(): Promise<void> {
     await this.browser?.close();
-    this.browser = await chromium.launch({ headless: true });
+    const playwrightProxy = this.proxyUrl.replace(/^socks5h:/, 'socks5:');
+    this.browser = await chromium.launch({
+      headless: true,
+      proxy: { server: playwrightProxy },
+    });
   }
 
-  /**
-   * Stories are intentionally not supported: Instagram requires an authenticated
-   * session to view stories at all, even for public accounts, which would
-   * reintroduce the login/ban-risk problem this anonymous scraper avoids.
-   */
-  async fetchUserPosts(targetUsername: string, limit = 20): Promise<IgPost[]> {
+  async fetchUserPostRefs(targetUsername: string, limit = 20): Promise<IgPostRef[]> {
     if (!this.browser) throw new Error('not started - call login() first');
 
     const context = await this.browser.newContext({
       userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36',
+      viewport: { width: 1440, height: 1200 },
     });
     const page = await context.newPage();
-
-    const posts: IgPost[] = [];
-    const seen = new Set<string>();
-
-    page.on('response', async (response) => {
-      const url = response.url();
-      if (!url.includes('/api/v1/users/web_profile_info') && !url.includes('/graphql/query')) return;
-      try {
-        const json = await response.json();
-        const user = json?.data?.user;
-        const edges: Array<{ node: RawMediaNode }> =
-          user?.edge_owner_to_timeline_media?.edges ?? user?.edge_felix_video_timeline?.edges ?? [];
-        for (const { node } of edges) {
-          if (seen.has(node.id)) continue;
-          seen.add(node.id);
-          posts.push(parsePost(node));
-        }
-      } catch {
-        // non-JSON or unrelated response, ignore
-      }
-    });
 
     try {
       await page.goto(`https://www.instagram.com/${targetUsername}/`, {
         waitUntil: 'domcontentloaded',
-        timeout: 30000,
+        timeout: 30_000,
       });
-      await page.waitForTimeout(3000);
+      await page.waitForTimeout(PROFILE_SETTLE_MS);
 
-      // scroll a few times to trigger lazy-loaded pagination requests, best-effort
-      for (let i = 0; i < 5 && posts.length < limit; i++) {
-        await page.mouse.wheel(0, 2000);
-        await page.waitForTimeout(2000);
+      if (/\/accounts\/login\/?/.test(page.url())) {
+        throw new Error('Instagram redirected profile discovery to login');
       }
+
+      const hrefs = await page.locator('a[href]').evaluateAll((anchors) =>
+        anchors.map((anchor) => anchor.getAttribute('href')).filter((href): href is string => Boolean(href)),
+      );
+
+      const refs: IgPostRef[] = [];
+      const seen = new Set<string>();
+      for (const href of hrefs) {
+        const ref = postRefFromHref(href);
+        if (!ref || seen.has(ref.ig_id)) continue;
+        seen.add(ref.ig_id);
+        refs.push(ref);
+        if (refs.length >= limit) break;
+      }
+
+      if (refs.length === 0) {
+        throw new Error(`Instagram profile loaded but no post permalinks were discovered for ${targetUsername}`);
+      }
+
+      return refs;
     } finally {
       await context.close();
     }
+  }
 
-    posts.sort((a, b) => b.taken_at - a.taken_at);
-    return posts.slice(0, limit);
+  async fetchPost(ref: IgPostRef, downloadMedia = false): Promise<IgPost> {
+    const result = await postfetch(ref.permalink, {
+      fetch: this.warpFetch,
+      preferredWidth: 1080,
+      tryMaxBytes: MAX_MEDIA_BYTES,
+    });
+
+    const media: IgMedia[] = [];
+    for (const item of result.items) {
+      if (item.kind !== 'image' && item.kind !== 'video') continue;
+      let data: Buffer | undefined;
+      if (downloadMedia) {
+        const blob = await downloadBlob(item, { fetch: this.warpFetch });
+        data = Buffer.from(await blob.arrayBuffer());
+      }
+      media.push({
+        kind: item.kind,
+        url: item.url,
+        filename: item.filename,
+        headers: headersToRecord(item.headers),
+        ...(data ? { data } : {}),
+      });
+    }
+
+    const createdAt = result.metadata?.createdAt;
+    const takenAtMs = createdAt ? Date.parse(createdAt) : NaN;
+
+    return {
+      ig_id: result.id || ref.ig_id,
+      permalink: ref.permalink,
+      text: result.metadata?.text ?? '',
+      media,
+      taken_at: Number.isFinite(takenAtMs) ? Math.floor(takenAtMs / 1000) : 0,
+    };
   }
 
   async close(): Promise<void> {
     await this.browser?.close();
+    this.browser = undefined;
   }
 }

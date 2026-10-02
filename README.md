@@ -1,33 +1,29 @@
 # ig_to_tg_reposter
 
-Node.js бот: моніторить Instagram-акаунт і репостить пости (текст + фото) у Telegram-канал. Мультиінстансний — кожен екземпляр керується через `.env`.
+Node.js/TypeScript engine для Instagram → Telegram reposting. Один codebase, окремий runtime-dir/.env/posts.db на кожен instance.
 
-Деталі стеку/конвенцій — див. `CLAUDE.md`.
+## Instagram flow
 
-## Instagram scraping: вибір бібліотеки
+- Публічний profile discovery: logged-out Playwright через SOCKS5 Cloudflare WARP.
+- З DOM беруться stable post/reel permalinks; логін, cookies та Instagram credentials не потрібні.
+- Кожен permalink резолвиться через `@postfetch/core@0.12.x` за схемою Ultimate Media Manager: public page/mobile/embed/GraphQL fallbacks.
+- Media завантажується самим ботом через той самий WARP path і upload-иться в Telegram як bytes, тому Instagram CDN headers/short-lived URLs не перекладаються на Telegram.
+- Підтримуються single photo, reels/video та mixed photo/video carousels до Telegram media-group limit 10.
 
-Розглянуто два варіанти:
+WARP endpoint задається `WARP_PROXY`; production instance очікує SOCKS5 proxy, напр. `socks5h://127.0.0.1:1080`.
 
-- **`instagram-private-api`** — клієнт приватного мобільного API з логіном і сесією.
-- **puppeteer** — headless-браузер, логін через веб-інтерфейс, скрейпінг DOM/GraphQL.
+## Commands
 
-**Обрано `instagram-private-api`.** Причини:
-
-1. Повертає структуровані дані (текст + всі carousel-фото) без парсингу DOM — надійніше для основної задачі (текст + фото).
-2. Нижчий ризик детекту порівняно з browser-automation: немає webdriver-флагів, немає потреби в CAPTCHA-солверах.
-3. Проєкт разово-персональний (один акаунт, пулінг раз на 5 хв) — навіть за умови, що бібліотека давно не оновлювалась, навантаження мінімальне і легко зупинити/замінити при появі проблем.
-4. Тримає стек чистим (Node/TS без другої мови) — puppeteer теж Node, але має суттєво вищий risk/maintenance profile (селектори ламаються при зміні розмітки IG, потрібні платні CAPTCHA-солвери).
-
-Компроміс: бібліотека `instagram-private-api` давно не отримувала релізів, тож при зміні IG-протоколу може знадобитись форк/патч або міграція на альтернативу (напр. `instagrapi` через окремий Python REST-wrapper, якщо колись знадобиться надійність важливіша за простоту стеку).
-
-Мітигація ризику бану: сесія кешується в `ig-session.json` (не логінимось щоразу), рандомна затримка 2–5с між IG-запитами, retry з exponential backoff (max 3) на мережевих викликах.
-
-## Команди
-
+```sh
+npm run build
+npm run start
+npm run backfill -- 20
+npm run seed -- 8
+npm run post-old
 ```
-npm run build      # tsc
-npm run start      # node dist/index.js
-npm run dev         # ts-node src/index.ts
-npm run post-old    # node dist/cli.js post-old
-node dist/cli.js backfill [count]  # заповнити архів історичними постами (без постингу)
-```
+
+`backfill` архівує видимі пости без publish. `seed` публікує latest archived N у chronological order усередині вибраної пачки.
+
+## Runtime model
+
+`dist/` і `node_modules/` можуть бути shared із generic repo. Instance тримає власні `.env`, `posts.db`, PM2 config та, за потреби, WARP sidecar.
