@@ -9,6 +9,7 @@ Node.js/TypeScript engine для Instagram → Telegram reposting. Один code
 - Кожен permalink резолвиться через `@postfetch/core@0.12.x` за схемою Ultimate Media Manager: public page/mobile/embed/GraphQL fallbacks.
 - Media завантажується самим ботом через той самий WARP path і upload-иться в Telegram як bytes, тому Instagram CDN headers/short-lived URLs не перекладаються на Telegram.
 - Підтримуються single photo, reels/video та mixed photo/video carousels до Telegram media-group limit 10.
+- Текст до 1024 UTF-16 символів іде в caption медіа. Довший текст публікується цілим окремим повідомленням після медіа; якщо він перевищує 4096 символів, ділиться за абзацами або реченнями. За помилки під час серії відомі вже надіслані повідомлення видаляються перед наступною спробою.
 
 WARP endpoint задається `WARP_PROXY`; production instance очікує SOCKS5 proxy, напр. `socks5h://127.0.0.1:1080`.
 
