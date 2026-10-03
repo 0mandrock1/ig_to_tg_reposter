@@ -7,8 +7,13 @@ const CAPTION_LIMIT = 1024;
 const TEXT_LIMIT = 4096;
 const MEDIA_GROUP_LIMIT = 10;
 
-function clip(text: string, limit: number): string {
-  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+function splitText(text: string, limit: number): [string, string] {
+  if (text.length <= limit) return [text, ''];
+  const boundary = text.lastIndexOf(' ', limit);
+  const newline = text.lastIndexOf('\n', limit);
+  const cut = Math.max(boundary, newline);
+  const splitAt = cut >= Math.floor(limit * 0.75) ? cut : limit;
+  return [text.slice(0, splitAt).trimEnd(), text.slice(splitAt).trimStart()];
 }
 
 function telegramMedia(media: IgMedia): string | { source: Buffer; filename: string } {
@@ -24,16 +29,27 @@ export class TelegramPublisher {
     this.channel = channelUsername.startsWith('@') ? channelUsername : `@${channelUsername}`;
   }
 
-  async publishPost(text: string, media: IgMedia[]): Promise<number[]> {
-    const caption = clip(text, CAPTION_LIMIT);
-
-    if (media.length === 0) {
+  private async sendText(text: string): Promise<number[]> {
+    const ids: number[] = [];
+    let remaining = text;
+    while (remaining) {
+      const [part, rest] = splitText(remaining, TEXT_LIMIT);
       const message = await withRetry(
-        () => this.bot.telegram.sendMessage(this.channel, clip(text || ' ', TEXT_LIMIT)),
+        () => this.bot.telegram.sendMessage(this.channel, part),
         'sendMessage',
         '[telegram]',
       );
-      return [message.message_id];
+      ids.push(message.message_id);
+      remaining = rest;
+    }
+    return ids;
+  }
+
+  async publishPost(text: string, media: IgMedia[]): Promise<number[]> {
+    const [caption, remainder] = splitText(text, CAPTION_LIMIT);
+
+    if (media.length === 0) {
+      return this.sendText(text || ' ');
     }
 
     if (media.length === 1) {
@@ -44,7 +60,7 @@ export class TelegramPublisher {
           'sendVideo',
           '[telegram]',
         );
-        return [message.message_id];
+        return [message.message_id, ...await this.sendText(remainder)];
       }
 
       const message = await withRetry(
@@ -52,7 +68,7 @@ export class TelegramPublisher {
         'sendPhoto',
         '[telegram]',
       );
-      return [message.message_id];
+      return [message.message_id, ...await this.sendText(remainder)];
     }
 
     const capped = media.slice(0, MEDIA_GROUP_LIMIT);
@@ -71,6 +87,6 @@ export class TelegramPublisher {
       'sendMediaGroup',
       '[telegram]',
     );
-    return messages.map((message) => message.message_id);
+    return [...messages.map((message) => message.message_id), ...await this.sendText(remainder)];
   }
 }
