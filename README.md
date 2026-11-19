@@ -28,3 +28,7 @@ npm run post-old
 ## Runtime model
 
 `dist/` і `node_modules/` можуть бути shared із generic repo. Instance тримає власні `.env`, `posts.db`, PM2 config та, за потреби, WARP sidecar.
+
+## Telegram menu policy
+
+The `alyonapsy` instance is an Instagram-to-Telegram publisher. It is a media transport, not a conversational control interface. No persistent reply keyboard is used. The publisher should attach contextual URLs only when a verified permalink exists; delivery status must reflect actual Telegram acknowledgement.
