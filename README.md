@@ -32,3 +32,7 @@ npm run post-old
 ## Telegram menu policy
 
 The `alyonapsy` instance is an Instagram-to-Telegram publisher. It is a media transport, not a conversational control interface. No persistent reply keyboard is used. The publisher should attach contextual URLs only when a verified permalink exists; delivery status must reflect actual Telegram acknowledgement.
+
+## /help
+
+The `alyonapsy` instance receives `/help`/`/start` through the private `tg-help-listener` service. Publisher logic does not poll Telegram or handle commands; replies are owner-only and do not change repost behaviour.
